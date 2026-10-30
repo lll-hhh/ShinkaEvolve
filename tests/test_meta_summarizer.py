@@ -1,8 +1,10 @@
+import asyncio
 from dataclasses import dataclass
 
 import pytest
 
 from shinka.core.summarizer import MetaSummarizer
+from shinka.core.async_summarizer import AsyncMetaSummarizer
 from shinka.database import Program
 
 
@@ -95,6 +97,50 @@ def test_update_meta_memory_successfully_updates_state():
     assert summarizer.meta_summary.find("Generation 1") < summarizer.meta_summary.find(
         "Generation 2"
     )
+
+
+def test_step1_preserves_metadata_when_batch_response_is_missing():
+    llm_client = DummyMetaLLM(
+        batch_responses=[None, DummyResponse(content="Summary for generation 2")]
+    )
+    summarizer = MetaSummarizer(meta_llm_client=llm_client)
+
+    summary, cost = summarizer._step1_individual_summaries(
+        [
+            make_program("prog-1", generation=1, patch_name="p1"),
+            make_program("prog-2", generation=2, patch_name="p2", correct=False),
+        ]
+    )
+
+    assert cost == 0.0
+    assert summary is not None
+    assert "Summary for generation 2" in summary
+    assert "Generation 2 - Patch Name p2 - Correct Program: False" in summary
+    assert "Generation 1 - Patch Name p1" not in summary
+
+
+def test_async_step1_preserves_metadata_when_batch_response_is_missing():
+    class AsyncBatchClient:
+        async def batch_kwargs_query(self, num_samples, msg, system_msg):
+            return [None, DummyResponse(content="Async summary for generation 2")]
+
+    summarizer = MetaSummarizer()
+    async_summarizer = AsyncMetaSummarizer(summarizer, AsyncBatchClient())
+
+    summary, cost = asyncio.run(
+        async_summarizer._step1_individual_summaries_async(
+            [
+                make_program("prog-1", generation=1, patch_name="p1"),
+                make_program("prog-2", generation=2, patch_name="p2", correct=False),
+            ]
+        )
+    )
+
+    assert cost == 0.0
+    assert summary is not None
+    assert "Async summary for generation 2" in summary
+    assert "Generation 2 - Patch Name p2 - Correct Program: False" in summary
+    assert "Generation 1 - Patch Name p1" not in summary
 
 
 def test_update_meta_memory_returns_none_without_client_or_programs():
